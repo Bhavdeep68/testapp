@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\BaseController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Mail;
 use App\Models\Course;
 use App\Models\EnrollCourse;
 use Stripe;
@@ -47,7 +48,6 @@ class HomeController extends BaseController
     public function enroll(Request $request, Course $course) {
         // if ajax request
         if ($request->ajax()) {
-            // dd($request);
             $data = [];
 
             // make validation rules for received data
@@ -70,147 +70,76 @@ class HomeController extends BaseController
             else {
 
                 try {
-
+                    // Create stripe object
                     $stripe = new \Stripe\StripeClient(env('STRIPE_SECRET'));
 
-                    $customer = $stripe->customers->create([
-                        'email' => $request->email,
-                        'name'  => $request->name
-                    ]);
+                    // Create customer for stripe payment. its optional to pass in payment intents
+                    // $customer = $stripe->customers->create([
+                    //     'email' => $request->email,
+                    //     'name'  => $request->name
+                    // ]);
 
+                    // create payment intents
                     $charge = $stripe->paymentIntents->create([
                         'amount' => $course->fees * 100,
                         'currency' => 'inr',
-                        'customer' => $customer->id,
+                        // 'customer' => $customer->id,
                         'payment_method' => $request->payment_method,
                         'description' => "Payment from ".$request->name.".",
                         'confirm' => true,
                         'receipt_email' => $request->email,
-                        // 'automatic_payment_methods' => [
-                        //     'enabled' => true,
-                        //     'allow_redirects' => 'never',
-                        // ],
-                        'payment_method_types' => ['card'],
+                        'automatic_payment_methods' => [
+                            'enabled' => true,
+                            'allow_redirects' => 'never',
+                        ],
                     ]);
 
-                    dd($charge);
-                    
+                    // store user and course data and payment intents data into database for reference
                     $enrollcourse = new EnrollCourse();
-
                     $enrollcourse->course_id            = $course->course_id;
                     $enrollcourse->user_name            = $request->name;
                     $enrollcourse->user_email           = $request->email;
                     $enrollcourse->amount               = $course->fees;
-                    $enrollcourse->transaction_id       = $request->description;
-                    $enrollcourse->transaction_details  = $request->description;
+                    $enrollcourse->transaction_id       = $charge->id;
+                    $enrollcourse->transaction_details  = $charge;
+                    $enrollcourse->save();
+
                     
-                    $result = $enrollcourse->save();
-                
+                    $to_name = $request->name;
+                    $to_email = $request->email;
+                    $data = array("name"=>$request->name, "course" => $course->name);
+                    $mail = Mail::send("emails.mail", $data, function($message) use ($to_name, $to_email, $course) {
+                        $message->to($to_email, $to_name)
+                                ->subject("Payment completed");
+                        $message->from('admin@admin.com','Admin');
+                        $message->cc($course->coach->email, $course->coach->name);
+                    });
+
+                    $data['type'] = 'success';
+                    $data['caption'] = 'Course enrolled successfully.';
+                    $data['payment_status'] = "succeeded";
+                    $data['client_secret'] = "";
+                    $data['redirectUrl'] = url('/');
+
+                    if ($charge->status == "requires_action") {
+                        $data['payment_status'] = $charge->status;
+                        $data['client_secret'] = $charge->client_secret;
+                    }
+
                 }
                 // SINCE IT'S A DECLINE, \Stripe\Error\Card WILL BE CAUGHT
                 catch(\Stripe\Error\Card $e) {
-
-                    $result = [
-                        'responce_code'         => 1,
-                        'responce_description'  => 'Card was declined.',
-                        'success_object'        => null
-                    ];
-
-                }
-                // TOO MANY REQUESTS MADE TO THE API TOO QUICKLY
-                catch (\Stripe\Error\RateLimit $e) {
-
-                    $result = [
-                        'responce_code'         => 1,
-                        'responce_description'  => 'Too many requests made to the API too quickly.',
-                        'success_object'        => null
-                    ];
-
-                }
-                // INVALID PARAMETERS WERE SUPPLIED TO STRIPE'S API
-                catch (\Stripe\Error\InvalidRequest $e) {
-
-                    $result = [
-                        'responce_code'         => 1,
-                        'responce_description'  => 'Invalid parameters were supplied to Stripe\'s API.',
-                        'success_object'        => null
-                    ];
-
-                }
-                // AUTHENTICATION WITH STRIPE'S API FAILED
-                // (MAYBE YOU CHANGED API KEYS RECENTLY)
-                catch (\Stripe\Error\Authentication $e) {
-
-                    $result = [
-                        'responce_code'         => 1,
-                        'responce_description'  => 'Authentication with Stripe\'s API failed.',
-                        'success_object'        => null
-                    ];
-
-                }
-                // Network communication with Stripe failed
-                // NETWORK PROBLEM, PERHAPS TRY AGAIN.
-                catch (\Stripe\Error\ApiConnection $e) {
-
-                    $result = [
-                        'responce_code'         => 1,
-                        'responce_description'  => 'Network problem.',
-                        'success_object'        => null
-                    ];
-
-                }
-                // DISPLAY A VERY GENERIC ERROR TO THE USER, AND MAY BE SEND YOURSELF AN EMAIL
-                // SOMETHING ELSE THAT'S NOT THE CUSTOMER'S FALUT
-                catch (\Stripe\Error\Base $e) {
-                    $result = [
-                        'responce_code'         => 1,
-                        'responce_description'  => 'Unable to process your request.',
-                        'success_object'        => null
-                    ];
-
-                }
-                // STRIPE'S SERVERS ARE DOWN
-                catch (\Stripe\Error\Api $e) {
-
-                    $result = [
-                        'responce_code'         => 1,
-                        'responce_description'  => 'Stripe\'s servers are down.',
-                        'success_object'        => null
-                    ];
-
-                }
-                // Invalid payload
-                catch(\UnexpectedValueException $e) {
-                    $result = [
-                        'responce_code'         => 1,
-                        'responce_description'  => 'Invalid payload received',
-                        'success_object'        => null
-                    ];
-                }
-                // Invalid signature
-                catch(\Stripe\Error\SignatureVerification $e) {
-                  $result = [
-                        'responce_code'         => 1,
-                        'responce_description'  => 'Invalid payload signature received',
-                        'success_object'        => null
-                    ];
+                    $data['type'] = 'error';
+                    $data['caption'] = 'Card was declined.';
                 }
                 // SOMETHING ELSE HAPPENED,COMPLETELY UNRELATED TO STRIPE
                 catch (Exception $e) {
-
-                    $result = [
-                        'responce_code'         => 1,
-                        'responce_description'  => 'Something else happened, completely unrelated to Stripe.',
-                        'success_object'        => null
-                    ];
-
+                    $data['type'] = 'error';
+                    $data['caption'] = 'Something else happened, completely unrelated to Stripe.';
                 }
-
-
             }
 
             return response()->json($data);
-
         }
         // if non ajax request
         else {

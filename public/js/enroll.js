@@ -1,4 +1,30 @@
+// Setup global stripe object
+var stripe = Stripe($('#stripekey').val());
+const elements = stripe.elements();
+const cardElement = elements.create('card', {
+	hidePostalCode: true,
+    style: {
+		base: {
+			color: '#495057',
+			fontWeight: '500',
+			fontFamily: 'Roboto, Open Sans, Segoe UI, sans-serif',
+			fontSize: '16px',
+			fontSmoothing: 'antialiased',
+			':-webkit-autofill': {
+				color: '#fce883',
+			},
+		},
+		invalid: {
+			iconColor: '#ff0000',
+			color: '#ff0000',
+		},
+    }
+});
+const cardForm = document.getElementById('formenroll');
+cardElement.mount('#card');
+
 $(document).ready(function() {
+	// Form Validation
 	$('#formenroll').validate({
 		rules: {
 			email: {
@@ -20,30 +46,7 @@ $(document).ready(function() {
 		}
 	});
 
-	let stripe = Stripe($('#stripekey').val());
-    const elements = stripe.elements()
-    const cardElement = elements.create('card', {
-    	// hidePostalCode: true,
-        style: {
-			base: {
-				color: '#495057',
-				fontWeight: '500',
-				fontFamily: 'Roboto, Open Sans, Segoe UI, sans-serif',
-				fontSize: '16px',
-				fontSmoothing: 'antialiased',
-				':-webkit-autofill': {
-					color: '#fce883',
-				},
-			},
-			invalid: {
-				iconColor: '#ff0000',
-				color: '#ff0000',
-			},
-        }
-    })
-    const cardForm = document.getElementById('formenroll')
-    cardElement.mount('#card')
-
+	// On click form submit get payment method id for server side payment intent
 	$('.enroll-btn').click(async function(e) {
 		e.preventDefault();
 		if($('#formenroll').valid()) {
@@ -57,6 +60,7 @@ $(document).ready(function() {
 		    });
 		    if (error) {
 		        console.log(error)
+		        showError(error.message);
 		    } else {
 				$('#payment_method').val(paymentMethod.id);
 		        $('#formenroll').submit();
@@ -65,16 +69,30 @@ $(document).ready(function() {
 	});
 });
 
-
-function formResponse(responseText, statusText){
+// Setup incoming response from server 
+async function formResponse(responseText, statusText){
 	var form = $('#formenroll');
-
 	hideLoader();
 	enableFormButton(form);
-
+	// dd(responseText);
 	if(statusText == 'success') {
 		if(responseText.type == 'success') {
-			window.location.href = responseText.redirectUrl;
+			// if action require for the 3d secure transaction
+			if(responseText.payment_status == 'requires_action') {
+			  	const { paymentIntent, error } = await stripe.confirmCardPayment(responseText.client_secret);
+			    if (error) {
+					showError(error.message);
+			        // console.log(error)
+			    } else {
+					showSuccess(responseText.caption, null, function(){
+						window.location.href = responseText.redirectUrl;				
+					});
+			    }
+			}else {
+				showSuccess(responseText.caption, null, function(){
+					window.location.href = responseText.redirectUrl;				
+				});
+		    }
 		}
 		else {
 			showError(responseText.caption);
